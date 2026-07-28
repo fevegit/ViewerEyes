@@ -1,6 +1,6 @@
 # ViewerEyes
 
-ViewerEyes is a custom Vencord userplugin that shows who is watching your Discord stream directly in calls and server voice channel member lists.
+ViewerEyes shows who is watching your Discord stream directly in calls and server voice channel member lists.
 
 ## Features
 
@@ -15,66 +15,193 @@ ViewerEyes is a custom Vencord userplugin that shows who is watching your Discor
 
 Custom Vencord plugins require a Vencord installation built from source.
 
-Follow the official Vencord guides first:
+Read the official Vencord guides before continuing:
 
 - https://docs.vencord.dev/installing/
 - https://docs.vencord.dev/installing/custom-plugins/
 
-You need Git, Node.js and pnpm available in your terminal.
+Install Git, Node.js and pnpm. Verify that they are available:
 
-## Manual installation
+```text
+git --version
+node --version
+pnpm --version
+```
 
-Open a terminal inside Vencord/src/userplugins and run:
+> Already have Vencord built from source? Skip the Vencord clone step and install the plugin inside your existing `src/userplugins` folder.
 
-`sh
+## Installation
+
+### Windows (PowerShell)
+
+Open PowerShell and run:
+
+```powershell
+Set-Location $HOME
+
+git clone https://github.com/Vendicated/Vencord.git
+Set-Location .\Vencord
+
+pnpm install --frozen-lockfile
+
+New-Item -ItemType Directory -Path .\src\userplugins -Force | Out-Null
+Set-Location .\src\userplugins
+
 git clone https://github.com/fevegit/ViewerEyes.git viewerEyes
-`
 
-Return to the Vencord root folder:
+Set-Location ..\..
 
-`sh
-cd ../../
 pnpm build
 pnpm inject
-`
+```
 
-Fully restart Discord, then open **Settings → Vencord → Plugins** and enable **ViewerEyes**.
+`pnpm inject` opens the Vencord installer. Select the Discord installation you want to patch.
 
-The plugin must be located at:
+After injection:
 
-`	ext
-Vencord/src/userplugins/viewerEyes/
-`
+1. Fully close Discord, including the system tray process.
+2. Start Discord again.
+3. Open **Settings -> Vencord -> Plugins**.
+4. Enable **ViewerEyes**.
+
+The final plugin path should be:
+
+```text
+%USERPROFILE%\Vencord\src\userplugins\viewerEyes\
+```
+
+### Linux (Bash)
+
+Open a terminal and run:
+
+```bash
+cd "$HOME"
+
+git clone https://github.com/Vendicated/Vencord.git
+cd Vencord
+
+pnpm install --frozen-lockfile
+
+mkdir -p src/userplugins
+cd src/userplugins
+
+git clone https://github.com/fevegit/ViewerEyes.git viewerEyes
+
+cd ../..
+
+pnpm build
+pnpm inject
+```
+
+`pnpm inject` opens the Vencord installer. Select the Discord installation you want to patch.
+
+After injection:
+
+1. Fully close Discord.
+2. Start Discord again.
+3. Open **Settings -> Vencord -> Plugins**.
+4. Enable **ViewerEyes**.
+
+The final plugin path should be:
+
+```text
+$HOME/Vencord/src/userplugins/viewerEyes/
+```
+
+For Vesktop or another non-standard Discord client, follow the official Vencord installation guide for that client and keep the plugin inside the same Vencord source tree.
 
 ## Updating
 
-Inside Vencord/src/userplugins/viewerEyes, run:
+### Windows (PowerShell)
 
-`sh
-git pull
-`
+```powershell
+Set-Location "$HOME\Vencord\src\userplugins\viewerEyes"
+git pull --ff-only
 
-Then rebuild from the Vencord root:
-
-`sh
+Set-Location "$HOME\Vencord"
 pnpm build
 pnpm inject
-`
+```
+
+Fully restart Discord afterwards.
+
+### Linux (Bash)
+
+```bash
+cd "$HOME/Vencord/src/userplugins/viewerEyes"
+git pull --ff-only
+
+cd "$HOME/Vencord"
+pnpm build
+pnpm inject
+```
 
 Fully restart Discord afterwards.
 
 ## Uninstalling
 
-1. Disable ViewerEyes in Vencord.
-2. Delete Vencord/src/userplugins/viewerEyes.
-3. Run pnpm build and pnpm inject again.
-4. Restart Discord.
+Disable the plugin in Vencord before removing its folder.
+
+### Windows (PowerShell)
+
+```powershell
+Set-Location "$HOME\Vencord"
+
+Remove-Item -LiteralPath ".\src\userplugins\viewerEyes" -Recurse -Force
+
+pnpm build
+pnpm inject
+```
+
+### Linux (Bash)
+
+```bash
+cd "$HOME/Vencord"
+
+rm -rf -- "src/userplugins/viewerEyes"
+
+pnpm build
+pnpm inject
+```
+
+Fully restart Discord after rebuilding.
+
+## Troubleshooting
+
+### The plugin does not appear
+
+Check that the plugin folder is exactly:
+
+```text
+Vencord/src/userplugins/viewerEyes/
+```
+
+The folder itself must directly contain the plugin source files such as `index.ts` or `index.tsx`.
+
+### `pnpm` is not recognized or not found
+
+Install pnpm and reopen the terminal. Then verify it with:
+
+```text
+pnpm --version
+```
+
+### The build fails after a Vencord update
+
+Update both Vencord and this plugin, reinstall dependencies and rebuild:
+
+```text
+git pull
+pnpm install --frozen-lockfile
+pnpm build
+```
 
 ## Notes
 
-- ViewerEyes is an unofficial custom userplugin and is not supported by the Vencord team.
+- This is an unofficial custom userplugin and is not supported by the Vencord team.
 - Custom plugins require rebuilding Vencord whenever their source changes.
-- This repository contains only the plugin source and public installation documentation.
+- Use `src/userplugins`; do not copy the plugin into `src/plugins`.
+- This repository contains only plugin source code and public documentation.
 
 ## License
 

@@ -203,6 +203,16 @@ pnpm build
 - Use `src/userplugins`; do not copy the plugin into `src/plugins`.
 - This repository contains only plugin source code and public documentation.
 
+<!-- acknowledgements:start -->
+## Acknowledgements
+
+ViewerEyes was inspired by [WhosWatching](https://github.com/fres621/vencord-whos-watching) by **fres621** and its contributors.
+
+I used the original plugin and liked being able to see who was watching my stream, but I wanted that information to be more visible throughout Discord. ViewerEyes was created as an independent implementation with viewer indicators on call tiles and voice-channel member lists, plus a dedicated viewer panel and additional interface controls.
+
+Many thanks to fres621 and the original contributors for their work and for inspiring this project.
+<!-- acknowledgements:end -->
+
 ## License
 
 GPL-3.0-or-later.

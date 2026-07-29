@@ -22,36 +22,56 @@ import {
 
 const settings = definePluginSettings({
     showTileEyes: {
-        description: t(
-            "Muestra un ojo en el recuadro de cada persona que está viendo tu transmisión",
-            "Show an eye on the tile of every person watching your stream."
-        ),
+        get displayName() {
+            return t("Mostrar ojos en recuadros", "Show Tile Eyes");
+        },
+        get description() {
+            return t(
+                "Muestra un ojo en el recuadro de cada persona que está viendo tu transmisión",
+                "Show an eye on the tile of every person watching your stream."
+            );
+        },
         type: OptionType.BOOLEAN,
         default: true,
         restartNeeded: true
     },
     showVoiceListEyes: {
-        description: t(
-            "Muestra un ojo junto a cada usuario del canal de voz que está viendo tu transmisión",
-            "Show an eye next to every voice-channel user watching your stream."
-        ),
+        get displayName() {
+            return t("Mostrar ojos en lista de voz", "Show Voice List Eyes");
+        },
+        get description() {
+            return t(
+                "Muestra un ojo junto a cada usuario del canal de voz que está viendo tu transmisión",
+                "Show an eye next to every voice-channel user watching your stream."
+            );
+        },
         type: OptionType.BOOLEAN,
         default: true,
         restartNeeded: true
     },
     previewSelf: {
-        description: t(
-            "Modo demo: muestra el ojo en tu recuadro y en tu fila del canal de voz, y añade espectadores simulados al panel",
-            "Demo mode: show the eye on your tile and voice row, and add simulated viewers to the panel."
-        ),
+        get displayName() {
+            return t("Modo demo", "Demo Mode");
+        },
+        get description() {
+            return t(
+                "Modo demo: muestra el ojo en tu recuadro y en tu fila del canal de voz, y añade espectadores simulados al panel",
+                "Demo mode: show the eye on your tile and voice row, and add simulated viewers to the panel."
+            );
+        },
         type: OptionType.BOOLEAN,
         default: false
     },
     demoViewerCount: {
-        description: t(
-            "Cantidad total de espectadores de prueba; el primero eres tú (máximo 30)",
-            "Total number of demo viewers; the first viewer is you (maximum 30)."
-        ),
+        get displayName() {
+            return t("Espectadores de prueba", "Demo Viewer Count");
+        },
+        get description() {
+            return t(
+                "Cantidad total de espectadores de prueba; el primero eres tú (máximo 30)",
+                "Total number of demo viewers; the first viewer is you (maximum 30)."
+            );
+        },
         type: OptionType.SLIDER,
         markers: Array.from({ length: 30 }, (_, index) => index + 1),
         default: 1,
@@ -64,19 +84,29 @@ const settings = definePluginSettings({
         }
     },
     showPanel: {
-        description: t(
-            "Muestra los espectadores debajo del panel de compartir pantalla",
-            "Show viewers below the screen-sharing panel."
-        ),
+        get displayName() {
+            return t("Mostrar panel", "Show Panel");
+        },
+        get description() {
+            return t(
+                "Muestra los espectadores debajo del panel de compartir pantalla",
+                "Show viewers below the screen-sharing panel."
+            );
+        },
         type: OptionType.BOOLEAN,
         default: true,
         restartNeeded: true
     },
     showStreamIconTooltip: {
-        description: t(
-            "Muestra los espectadores al pasar el ratón por el icono de compartir pantalla",
-            "Show viewers when hovering over the screen-sharing icon."
-        ),
+        get displayName() {
+            return t("Tooltip del icono de transmisión", "Stream Icon Tooltip");
+        },
+        get description() {
+            return t(
+                "Muestra los espectadores al pasar el ratón por el icono de compartir pantalla",
+                "Show viewers when hovering over the screen-sharing icon."
+            );
+        },
         type: OptionType.BOOLEAN,
         default: true,
         restartNeeded: true
@@ -110,10 +140,12 @@ function ViewerAudiencePanel() {
 
 export default definePlugin({
     name: "ViewerEyes",
-    description: t(
-        "Indica quién está viendo tu transmisión en los recuadros, la lista del canal de voz, el panel de actividad y el icono de pantalla compartida.",
-        "Show who is watching your stream in tiles, the voice-channel list, the activity panel, and the screen-sharing icon."
-    ),
+    get description() {
+        return t(
+            "Indica quién está viendo tu transmisión en los recuadros, la lista del canal de voz, el panel de actividad y el icono de pantalla compartida.",
+            "Show who is watching your stream in tiles, the voice-channel list, the activity panel, and the screen-sharing icon."
+        );
+    },
     authors: [{ name: "feve", id: 0n }],
     settings,
 

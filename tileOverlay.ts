@@ -7,6 +7,7 @@
 import { SettingsStore } from "@api/Settings";
 import type { User } from "@vencord/discord-types";
 import { RelationshipStore, UserStore } from "@webpack/common";
+import { t } from "./i18n";
 
 import {
     type ActiveBroadcast,
@@ -342,7 +343,11 @@ function ensureBadgeLayer(): HTMLDivElement {
 }
 
 function updateBadgeLabel(host: HTMLElement, user: User): void {
-    const tooltip = `${displayName(user)} está viendo tu transmisión`;
+    const name = displayName(user);
+    const tooltip = t(
+        `${name} está viendo tu transmisión`,
+        `${name} is watching your stream`
+    );
     host.dataset.viewerEyesTooltip = tooltip;
     host.setAttribute("aria-label", tooltip);
 }

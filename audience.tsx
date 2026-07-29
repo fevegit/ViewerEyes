@@ -9,6 +9,7 @@ import { openUserProfile } from "@utils/discord";
 import type { User } from "@vencord/discord-types";
 import { React, ReactDOM, RelationshipStore, UserStore } from "@webpack/common";
 import type { ComponentType, JSX } from "react";
+import { t } from "./i18n";
 
 import {
     getCurrentUserActiveStream,
@@ -79,17 +80,13 @@ function preferredName(user: User): string {
     return RelationshipStore.getNickname(user.id) || user.globalName || user.username;
 }
 
-function localizedCopy(spanish: string, english: string): string {
-    const locale = document.documentElement.lang || navigator.language || "en";
-    return locale.toLowerCase().startsWith("es") ? spanish : english;
-}
 
 function emptyLabel(): string {
-    return localizedCopy("No hay espectadores", "No viewers");
+    return t("No hay espectadores", "No viewers");
 }
 
 function audienceAriaLabel(total: number): string {
-    return localizedCopy(
+    return t(
         `Espectadores de la transmisión: ${total}`,
         `Stream viewers: ${total}`
     );
@@ -378,17 +375,17 @@ function AudienceCard({ snapshot }: { snapshot: AudienceSnapshot; }): JSX.Elemen
 
                         {snapshot.entries.length === 0 && snapshot.unresolved > 0 && (
                             <div className="ve-audience-unresolved">
-                                +{snapshot.unresolved} {localizedCopy("sin cargar", "unresolved")}
+                                +{snapshot.unresolved} {t("sin cargar", "unresolved")}
                             </div>
                         )}
                     </div>
 
                     {showPagination && (
-                        <div className="ve-audience-pagination" aria-label={localizedCopy("Paginación de espectadores", "Viewer pagination")}>
+                        <div className="ve-audience-pagination" aria-label={t("Paginación de espectadores", "Viewer pagination")}>
                             <button
                                 type="button"
                                 className="ve-audience-page-button"
-                                aria-label={localizedCopy("Página anterior", "Previous page")}
+                                aria-label={t("Página anterior", "Previous page")}
                                 disabled={page === 0}
                                 onMouseDown={event => event.stopPropagation()}
                                 onClick={event => {
@@ -408,7 +405,7 @@ function AudienceCard({ snapshot }: { snapshot: AudienceSnapshot; }): JSX.Elemen
                             <button
                                 type="button"
                                 className="ve-audience-page-button"
-                                aria-label={localizedCopy("Página siguiente", "Next page")}
+                                aria-label={t("Página siguiente", "Next page")}
                                 disabled={page >= pageCount - 1}
                                 onMouseDown={event => event.stopPropagation()}
                                 onClick={event => {
@@ -425,7 +422,7 @@ function AudienceCard({ snapshot }: { snapshot: AudienceSnapshot; }): JSX.Elemen
 
                     {snapshot.unresolved > 0 && snapshot.entries.length > 0 && page === pageCount - 1 && (
                         <div className="ve-audience-unresolved">
-                            +{snapshot.unresolved} {localizedCopy("sin cargar", "unresolved")}
+                            +{snapshot.unresolved} {t("sin cargar", "unresolved")}
                         </div>
                     )}
                 </>

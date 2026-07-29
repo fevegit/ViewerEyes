@@ -216,3 +216,17 @@ Many thanks to fres621 and the original contributors for their work and for insp
 ## License
 
 GPL-3.0-or-later.
+
+<!-- spanish-documentation:start -->
+## Documentación en español
+
+**ViewerEyes** indica qué usuarios están viendo tu transmisión de Discord.
+
+### Funciones
+
+- Ojo sobre el recuadro del espectador.
+- Indicador junto al usuario en la lista del canal de voz.
+- Panel de espectadores y popover sobre el icono de compartir pantalla.
+- Modo de demostración configurable.
+- Interfaz automática en español o inglés según el idioma de Discord.
+<!-- spanish-documentation:end -->

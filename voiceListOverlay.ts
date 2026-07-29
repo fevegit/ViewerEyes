@@ -7,6 +7,7 @@
 import { SettingsStore } from "@api/Settings";
 import type { User } from "@vencord/discord-types";
 import { RelationshipStore, UserStore } from "@webpack/common";
+import { t } from "./i18n";
 
 import {
     type ActiveBroadcast,
@@ -47,10 +48,6 @@ function foldText(value: string | null | undefined): string {
     return value?.trim().toLocaleLowerCase() ?? "";
 }
 
-function localizedCopy(spanish: string, english: string): string {
-    const locale = document.documentElement.lang || navigator.language || "en";
-    return locale.toLowerCase().startsWith("es") ? spanish : english;
-}
 
 function displayName(user: User): string {
     return RelationshipStore.getNickname(user.id) || user.globalName || user.username;
@@ -422,7 +419,7 @@ function ensureVoiceLayer(): HTMLDivElement {
 
 function updateVoiceBadgeLabel(host: HTMLElement, user: User): void {
     const name = displayName(user);
-    const tooltip = localizedCopy(
+    const tooltip = t(
         `${name} está viendo tu transmisión`,
         `${name} is watching your stream`
     );

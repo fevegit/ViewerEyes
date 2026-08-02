@@ -34,6 +34,7 @@ interface LocatedVoiceRow {
 const LEFT_SIDEBAR_LIMIT = 620;
 const EYE_SIZE = 16;
 const EYE_GAP = 5;
+const ROW_MISS_GRACE_MS = 1_800;
 
 let runtime: VoiceListEyeRuntime | null = null;
 let voiceObserver: MutationObserver | null = null;
@@ -116,7 +117,6 @@ function isVisible(element: HTMLElement): boolean {
 
     return (
         element.isConnected &&
-        element.offsetParent !== null &&
         style.display !== "none" &&
         style.visibility !== "hidden" &&
         rect.width > 0 &&
@@ -148,7 +148,10 @@ function isInsideLeftSidebarGeometry(element: HTMLElement): boolean {
 function rowContainsIdentity(row: HTMLElement, user: User, guildId?: string): boolean {
     const escapedId = CSS.escape(user.id);
     if (row.matches(`[data-user-id="${escapedId}"], [data-list-item-id*="${escapedId}"]`)) return true;
-    if (row.querySelector(`[data-user-id="${escapedId}"], [data-list-item-id*="${escapedId}"], img[src*="${escapedId}"]`)) return true;
+    if (row.querySelector(
+        `[data-user-id="${escapedId}"], [data-list-item-id*="${escapedId}"], ` +
+        `[src*="${escapedId}"], [style*="${escapedId}"]`
+    )) return true;
 
     const text = foldText(row.textContent);
     return [...identityAliases(user, guildId)].some(name => textMatchesAlias(text, name));
@@ -182,7 +185,7 @@ function rankVoiceRow(row: HTMLElement, user: User, guildId?: string): number {
 
     if (row.matches(`[data-user-id="${escapedId}"]`)) score += 160;
     if (row.matches(`[data-list-item-id*="${escapedId}"]`)) score += 145;
-    if (row.querySelector(`img[src*="${escapedId}"]`)) score += 120;
+    if (row.querySelector(`[src*="${escapedId}"], [style*="${escapedId}"]`)) score += 120;
     if (row.querySelector(`[data-user-id="${escapedId}"], [data-list-item-id*="${escapedId}"]`)) score += 90;
     if (row.matches("[role='button'], [role='treeitem'], [role='listitem']")) score += 28;
     if (/voice|user|member/.test(row.className)) score += 18;
@@ -200,7 +203,8 @@ function identityAnchors(user: User, guildId?: string): Set<HTMLElement> {
     for (const selector of [
         `[data-user-id="${escapedId}"]`,
         `[data-list-item-id*="${escapedId}"]`,
-        `img[src*="${escapedId}"]`
+        `[src*="${escapedId}"]`,
+        `[style*="${escapedId}"]`
     ]) {
         document.querySelectorAll<HTMLElement>(selector).forEach(element => {
             if (isInsideLeftChannelSidebar(element)) result.add(element);
@@ -322,7 +326,8 @@ function locateCurrentStreamerVoiceRow(user: User, guildId?: string): LocatedVoi
             const hasUserIdentity = hasAlias || row.matches(
                 `[data-user-id="${escapedId}"], [data-list-item-id*="${escapedId}"]`
             ) || row.querySelector(
-                `[data-user-id="${escapedId}"], [data-list-item-id*="${escapedId}"], img[src*="${escapedId}"]`
+                `[data-user-id="${escapedId}"], [data-list-item-id*="${escapedId}"], ` +
+                `[src*="${escapedId}"], [style*="${escapedId}"]`
             ) != null;
             const hasAvatar = rowHasAvatar(row);
 
@@ -444,21 +449,52 @@ function makeVoiceBadge(user: User): HTMLDivElement {
     return host;
 }
 
-function findStatusAnchor(row: HTMLElement, nameElement: HTMLElement | null): HTMLElement | null {
+function findStatusAnchor(
+    row: HTMLElement,
+    nameElement: HTMLElement | null,
+    liveBadge: HTMLElement | null
+): HTMLElement | null {
     const rowRect = row.getBoundingClientRect();
+    const liveRect = liveBadge?.getBoundingClientRect();
     const minimumLeft = Math.max(
         rowRect.left + rowRect.width * 0.46,
         (nameElement?.getBoundingClientRect().right ?? rowRect.left + 54) + 4
     );
     let best: { element: HTMLElement; left: number; } | null = null;
 
-    row.querySelectorAll<HTMLElement>("svg, [role='img'], [class*='icon']").forEach(element => {
+    row.querySelectorAll<HTMLElement>(
+        "svg, [role='img'], [class*='icon']"
+    ).forEach(element => {
+        if (
+            liveBadge &&
+            (
+                element === liveBadge ||
+                liveBadge.contains(element) ||
+                element.contains(liveBadge)
+            )
+        ) return;
+
         const rect = element.getBoundingClientRect();
-        if (rect.width < 10 || rect.width > 30 || rect.height < 10 || rect.height > 30) return;
+
+        if (
+            rect.width < 10 ||
+            rect.width > 30 ||
+            rect.height < 10 ||
+            rect.height > 30
+        ) return;
+
         if (rect.left < minimumLeft || rect.right > rowRect.right + 1) return;
         if (rect.top < rowRect.top - 1 || rect.bottom > rowRect.bottom + 1) return;
 
-        if (!best || rect.left < best.left) best = { element, left: rect.left };
+        if (
+            liveRect &&
+            rect.left < liveRect.right + 1 &&
+            rect.right > liveRect.left - 1
+        ) return;
+
+        if (!best || rect.left < best.left) {
+            best = { element, left: rect.left };
+        }
     });
 
     return best?.element ?? null;
@@ -516,87 +552,89 @@ function applyMatchingStatusColor(host: HTMLElement, anchor: HTMLElement | null)
     host.style.removeProperty("color");
 }
 
-function placeVoiceBadge(host: HTMLElement, located: LocatedVoiceRow): void {
-    const { row, nameElement, directAnchor } = located;
-
-    if (directAnchor?.isConnected) {
-        const liveRect = directAnchor.getBoundingClientRect();
-        let placementAnchor: HTMLElement = directAnchor;
-        let matchingStatusAnchor: HTMLElement | null = null;
-
-        // Find the compact row containing the LIVE badge and, when present,
-        // position the eye before the first mute/deafen/status icon instead of
-        // overlapping those icons.
-        let container: HTMLElement | null = directAnchor.parentElement;
-        let depth = 0;
-        while (container && depth < 7) {
-            const rect = container.getBoundingClientRect();
-            if (
-                isInsideLeftSidebarGeometry(container) &&
-                rect.width >= 110 && rect.width <= 430 &&
-                rect.height >= 22 && rect.height <= 70
-            ) break;
-
-            container = container.parentElement;
-            depth += 1;
-        }
-
-        if (container) {
-            let firstStatus: { element: HTMLElement; left: number; } | null = null;
-            container.querySelectorAll<HTMLElement>("svg, [role='img'], [class*='icon']").forEach(element => {
-                const rect = element.getBoundingClientRect();
-                if (!isVisible(element)) return;
-                if (rect.width < 10 || rect.width > 30 || rect.height < 10 || rect.height > 30) return;
-                if (rect.left < container!.getBoundingClientRect().left + 45) return;
-                if (rect.left >= liveRect.left) return;
-                if (!firstStatus || rect.left < firstStatus.left) firstStatus = { element, left: rect.left };
-            });
-
-            if (firstStatus) {
-                placementAnchor = firstStatus.element;
-                matchingStatusAnchor = firstStatus.element;
-            }
-        }
-
-        applyMatchingStatusColor(host, matchingStatusAnchor);
-        const anchorRect = placementAnchor.getBoundingClientRect();
-        const left = Math.max(62, anchorRect.left - EYE_GAP - EYE_SIZE);
-        const top = anchorRect.top + (anchorRect.height - EYE_SIZE) / 2;
-
-        host.style.left = px(left);
-        host.style.top = px(top);
-        host.style.width = `${EYE_SIZE}px`;
-        host.style.height = `${EYE_SIZE}px`;
-        return;
-    }
-
-    const rowRect = row.getBoundingClientRect();
-    const nameRect = nameElement?.getBoundingClientRect();
-    const statusAnchor = findStatusAnchor(row, nameElement);
-    const liveBadge = statusAnchor ? null : findLiveBadge(row, nameElement);
-    const statusRect = statusAnchor?.getBoundingClientRect() ?? liveBadge?.getBoundingClientRect();
-
-    applyMatchingStatusColor(host, statusAnchor);
-
-    const minimumLeft = rowRect.left + 48;
-    const maximumLeft = rowRect.right - EYE_SIZE - 6;
-    let left: number;
-
-    if (statusRect) {
-        left = statusRect.left - EYE_GAP - EYE_SIZE;
-    } else if (nameRect) {
-        left = nameRect.right + 7;
-    } else {
-        left = maximumLeft;
-    }
-
-    left = clamp(left, minimumLeft, maximumLeft);
-    const top = rowRect.top + (rowRect.height - EYE_SIZE) / 2;
-
+function setVoiceBadgeRect(
+    host: HTMLElement,
+    left: number,
+    top: number
+): void {
     host.style.left = px(left);
     host.style.top = px(top);
     host.style.width = `${EYE_SIZE}px`;
     host.style.height = `${EYE_SIZE}px`;
+}
+
+function overlapsRect(
+    left: number,
+    top: number,
+    rect: DOMRect,
+    padding = 2
+): boolean {
+    return (
+        left < rect.right + padding &&
+        left + EYE_SIZE > rect.left - padding &&
+        top < rect.bottom + padding &&
+        top + EYE_SIZE > rect.top - padding
+    );
+}
+
+function placeVoiceBadge(
+    host: HTMLElement,
+    located: LocatedVoiceRow
+): void {
+    const { row, nameElement, directAnchor } = located;
+    const rowRect = row.getBoundingClientRect();
+    const nameRect = nameElement?.getBoundingClientRect();
+    const liveBadge = directAnchor?.isConnected
+        ? directAnchor
+        : findLiveBadge(row, nameElement);
+    const statusAnchor = findStatusAnchor(
+        row,
+        nameElement,
+        liveBadge
+    );
+    const liveRect = liveBadge?.getBoundingClientRect();
+    const statusRect = statusAnchor?.getBoundingClientRect();
+    const top = rowRect.top + (rowRect.height - EYE_SIZE) / 2;
+    const minimumLeft = rowRect.left + 48;
+    const maximumLeft = rowRect.right - EYE_SIZE - 6;
+
+    applyMatchingStatusColor(host, statusAnchor);
+
+    const candidates = [
+        liveRect ? liveRect.left - EYE_GAP - EYE_SIZE : null,
+        statusRect ? statusRect.left - EYE_GAP - EYE_SIZE : null,
+        liveRect ? liveRect.right + EYE_GAP : null,
+        nameRect ? nameRect.right + 7 : null,
+        maximumLeft
+    ].filter((value): value is number => value != null);
+
+    const obstacles = [liveRect, statusRect]
+        .filter((rect): rect is DOMRect => rect != null);
+
+    let left = candidates.find(candidate =>
+        candidate >= minimumLeft &&
+        candidate <= maximumLeft &&
+        obstacles.every(rect => !overlapsRect(candidate, top, rect))
+    );
+
+    if (left == null && liveRect) {
+        const before = liveRect.left - EYE_GAP - EYE_SIZE;
+        const after = liveRect.right + EYE_GAP;
+
+        if (before >= minimumLeft) {
+            left = before;
+        } else if (after <= maximumLeft) {
+            left = after;
+        }
+    }
+
+    left ??= clamp(
+        nameRect ? nameRect.right + 7 : maximumLeft,
+        minimumLeft,
+        maximumLeft
+    );
+
+    setVoiceBadgeRect(host, left, top);
 }
 
 function refreshVoiceHover(): void {
@@ -619,66 +657,114 @@ function trackVoicePointer(event: PointerEvent): void {
 function reconcileVoiceBadgesUnsafe(): void {
     const stream = getCurrentUserActiveStream();
     const viewers = stream ? resolveEyeTargets(stream) : [];
-    let layer = document.querySelector<HTMLDivElement>(".vc-viewer-eyes-voice-layer");
+    let layer = document.querySelector<HTMLDivElement>(
+        ".vc-viewer-eyes-voice-layer"
+    );
 
     if (!stream || !viewers.length) {
         layer?.remove();
+
         updateFeatureHealth("voiceList", {
             active: stream != null,
             viewerCount: viewers.length,
             targetsFound: 0,
             surfacesFound: 0
         });
+
         return;
     }
 
     layer ??= ensureVoiceLayer();
-    const desired = new Map<string, { user: User; located: LocatedVoiceRow; }>();
 
+    const desired = new Map<
+        string,
+        { user: User; located: LocatedVoiceRow; }
+    >();
     const currentUser = UserStore.getCurrentUser() as User | undefined;
 
     for (const user of viewers) {
-        const isPreviewSelf = runtime?.includeSelf() && currentUser?.id === user.id;
+        const isPreviewSelf =
+            runtime?.includeSelf() &&
+            currentUser?.id === user.id;
         const located = isPreviewSelf
-            ? locateCurrentStreamerVoiceRow(user, stream.guildId) ?? locateVoiceRow(user, stream.guildId)
+            ? (
+                locateCurrentStreamerVoiceRow(user, stream.guildId) ??
+                locateVoiceRow(user, stream.guildId)
+            )
             : locateVoiceRow(user, stream.guildId);
 
-        if (located) desired.set(user.id, { user, located });
+        if (located) {
+            desired.set(user.id, { user, located });
+        }
     }
 
     const existing = new Map<string, HTMLElement>();
-    layer.querySelectorAll<HTMLElement>(".vc-viewer-eyes-voice-host").forEach(host => {
+
+    layer.querySelectorAll<HTMLElement>(
+        ".vc-viewer-eyes-voice-host"
+    ).forEach(host => {
         const id = host.dataset.viewerEyesUserId;
         if (id) existing.set(id, host);
     });
 
+    const targetIds = new Set(viewers.map(user => user.id));
+    const now = Date.now();
+
     for (const [id, host] of existing) {
-        if (!desired.has(id)) host.remove();
+        if (!targetIds.has(id)) {
+            host.remove();
+            continue;
+        }
+
+        if (!desired.has(id)) {
+            const missingSince = Number(
+                host.dataset.viewerEyesMissingSince ?? now
+            );
+
+            host.dataset.viewerEyesMissingSince ??= String(now);
+
+            if (now - missingSince >= ROW_MISS_GRACE_MS) {
+                host.remove();
+            }
+        }
     }
 
     for (const [id, { user, located }] of desired) {
         const host = existing.get(id) ?? makeVoiceBadge(user);
         const isNew = !host.isConnected;
 
+        delete host.dataset.viewerEyesMissingSince;
         updateVoiceBadgeLabel(host, user);
         placeVoiceBadge(host, located);
 
         if (isNew) {
             layer.append(host);
+
             requestAnimationFrame(() => {
-                if (host.isConnected) host.classList.remove("vc-viewer-eyes-voice-host-entering");
+                if (host.isConnected) {
+                    host.classList.remove(
+                        "vc-viewer-eyes-voice-host-entering"
+                    );
+                }
             });
         }
     }
 
     refreshVoiceHover();
-    if (!desired.size) layer.remove();
+
+    const renderedCount = layer.querySelectorAll(
+        ".vc-viewer-eyes-voice-host"
+    ).length;
+
+    if (renderedCount === 0) {
+        layer.remove();
+    }
 
     updateFeatureHealth("voiceList", {
         active: true,
         viewerCount: viewers.length,
-        targetsFound: desired.size,
-        surfacesFound: desired.size > 0 ? 1 : 0
+        targetsFound: renderedCount,
+        surfacesFound: renderedCount > 0 ? 1 : 0
     });
 }
 
@@ -687,7 +773,6 @@ function reconcileVoiceBadges(): void {
         reconcileVoiceBadgesUnsafe();
     } catch (error) {
         reportRuntimeError("voice.reconcile", error);
-        document.querySelector(".vc-viewer-eyes-voice-layer")?.remove();
     }
 }
 

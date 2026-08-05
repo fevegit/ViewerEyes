@@ -9,7 +9,6 @@ ViewerEyes shows who is watching your Discord stream directly in calls and serve
 - Compact list of current stream viewers.
 - Pagination for larger viewer lists.
 - Theme-aware interface.
-- Optional demo controls for testing the viewer UI.
 
 ## Requirements
 

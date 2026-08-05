@@ -7,7 +7,7 @@
 import { Logger } from "@utils/Logger";
 import { findByPropsLazy, findStoreLazy } from "@webpack";
 
-export const VIEWER_EYES_VERSION = "3.16.0";
+export const VIEWER_EYES_VERSION = "3.17.0";
 
 export interface ActiveBroadcast {
     guildId?: string;

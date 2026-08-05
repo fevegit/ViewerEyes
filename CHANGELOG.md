@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.17.0 - voice-list compatibility and placement
+
+- Fixed missing viewer eyes on some Discord voice-channel rows.
+- Prevented viewer indicators from inheriting black colors from status and activity icons.
+- Prevented voice-list indicators from appearing in Friends, direct messages, navigation entries or the connection panel.
+- Improved placement around mute, deafen, Live and activity badges.
+- Reordered the plugin settings for clearer navigation.
+- Removed the development-only demo controls from the public release.
+
 ## 3.16.0 - voice-list indicator reliability
 
 - Fixed the viewer eye occasionally disappearing from voice-channel member rows.

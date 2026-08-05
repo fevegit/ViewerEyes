@@ -1,24 +1,3 @@
-/*
- * ViewerEyes
- * Copyright (c) 2026 feve
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
-
-import "./style.css";
-
-import { definePluginSettings } from "@api/Settings";
-import definePlugin, { OptionType } from "@utils/types";
-
-import { AudiencePanel, createShareIconDecorator } from "./audience";
-import { t } from "./i18n";
-import { startEyeOverlay, stopEyeOverlay } from "./tileOverlay";
-import { startVoiceListOverlay, stopVoiceListOverlay } from "./voiceListOverlay";
-import {
-    getViewerEyesDiagnostics,
-    markFeatureEnabled,
-    reportRuntimeError,
-    VIEWER_EYES_VERSION
-} from "./runtime";
 
 const settings = definePluginSettings({
     showTileEyes: {
@@ -49,40 +28,6 @@ const settings = definePluginSettings({
         default: true,
         restartNeeded: true
     },
-    previewSelf: {
-        get displayName() {
-            return t("Modo demo", "Demo Mode");
-        },
-        get description() {
-            return t(
-                "Modo demo: muestra el ojo en tu recuadro y en tu fila del canal de voz, y añade espectadores simulados al panel",
-                "Demo mode: show the eye on your tile and voice row, and add simulated viewers to the panel."
-            );
-        },
-        type: OptionType.BOOLEAN,
-        default: false
-    },
-    demoViewerCount: {
-        get displayName() {
-            return t("Espectadores de prueba", "Demo Viewer Count");
-        },
-        get description() {
-            return t(
-                "Cantidad total de espectadores de prueba; el primero eres tú (máximo 30)",
-                "Total number of demo viewers; the first viewer is you (maximum 30)."
-            );
-        },
-        type: OptionType.SLIDER,
-        markers: Array.from({ length: 30 }, (_, index) => index + 1),
-        default: 1,
-        stickToMarkers: true,
-        componentProps: {
-            onValueRender: (value: number) => String(Math.round(value)),
-            onMarkerRender: (value: number) => [1, 5, 10, 15, 20, 25, 30].includes(value)
-                ? String(value)
-                : ""
-        }
-    },
     showPanel: {
         get displayName() {
             return t("Mostrar panel", "Show Panel");
@@ -110,32 +55,11 @@ const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         default: true,
         restartNeeded: true
-    }
+    },
 });
 
-interface DemoSettings {
-    enabled: boolean;
-    viewerCount: number;
-}
-
-function useDemoSettings(): DemoSettings {
-    const { previewSelf, demoViewerCount } = settings.use(["previewSelf", "demoViewerCount"]);
-
-    return {
-        enabled: previewSelf,
-        viewerCount: Math.max(1, Math.min(30, Math.round(demoViewerCount)))
-    };
-}
-
 function ViewerAudiencePanel() {
-    const demo = useDemoSettings();
-
-    return (
-        <AudiencePanel
-            includeSelf={demo.enabled}
-            demoViewerCount={demo.enabled ? demo.viewerCount : 0}
-        />
-    );
+    return <AudiencePanel />;
 }
 
 export default definePlugin({
@@ -169,21 +93,11 @@ export default definePlugin({
     ],
 
     start() {
-        settings.store.demoViewerCount = Math.max(
-            1,
-            Math.min(30, Math.round(settings.store.demoViewerCount || 1))
-        );
-
-        const previewSettingPath = `plugins.${settings.pluginName}.previewSelf`;
-
-        markFeatureEnabled("audience", settings.store.showPanel !== false || settings.store.showStreamIconTooltip !== false);
+markFeatureEnabled("audience", settings.store.showPanel !== false || settings.store.showStreamIconTooltip !== false);
 
         if (settings.store.showTileEyes !== false) {
             try {
-                startEyeOverlay({
-                    includeSelf: () => settings.store.previewSelf,
-                    previewSettingPath
-                });
+                startEyeOverlay();
             } catch (error) {
                 reportRuntimeError("tile.start", error);
             }
@@ -193,10 +107,7 @@ export default definePlugin({
 
         if (settings.store.showVoiceListEyes !== false) {
             try {
-                startVoiceListOverlay({
-                    includeSelf: () => settings.store.previewSelf,
-                    previewSettingPath
-                });
+                startVoiceListOverlay();
             } catch (error) {
                 reportRuntimeError("voice.start", error);
             }
@@ -226,6 +137,6 @@ export default definePlugin({
 
     renderAudiencePanel: ViewerAudiencePanel,
     decorateShareIcon(props) {
-        return createShareIconDecorator(props, useDemoSettings);
+        return createShareIconDecorator(props);
     }
 });

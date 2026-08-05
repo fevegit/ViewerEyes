@@ -1,114 +1,16 @@
-/*
- * ViewerEyes - voice channel list badge overlay
- * Copyright (c) 2026 feve
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
-
-import { SettingsStore } from "@api/Settings";
-import type { User } from "@vencord/discord-types";
-import { RelationshipStore, UserStore } from "@webpack/common";
-import { t } from "./i18n";
-
-import {
-    type ActiveBroadcast,
-    getCurrentUserActiveStream,
-    getServerNickname,
-    getViewerIds,
-    markFeatureEnabled,
-    reportRuntimeError,
-    subscribeToStreamingChanges,
-    updateFeatureHealth
-} from "./runtime";
-
-export interface VoiceListEyeRuntime {
-    includeSelf(): boolean;
-    previewSettingPath: string;
-}
-
-interface LocatedVoiceRow {
-    row: HTMLElement;
-    nameElement: HTMLElement | null;
-    directAnchor?: HTMLElement;
-}
-
-const LEFT_SIDEBAR_LIMIT = 620;
-const EYE_SIZE = 16;
-const EYE_GAP = 5;
-const ROW_MISS_GRACE_MS = 1_800;
-
-let runtime: VoiceListEyeRuntime | null = null;
-let voiceObserver: MutationObserver | null = null;
-let storeUnsubscribe: (() => void) | null = null;
-let previewSettingListener: (() => void) | null = null;
-let previewPollTimer: number | null = null;
-let scheduledFrame = 0;
-let pointerX = -1;
-let pointerY = -1;
-
-function foldText(value: string | null | undefined): string {
-    return value?.trim().toLocaleLowerCase() ?? "";
-}
 
 
-function displayName(user: User): string {
-    return RelationshipStore.getNickname(user.id) || user.globalName || user.username;
-}
 
-function serverNickname(userId: string, guildId?: string): string | undefined {
-    return getServerNickname(guildId, userId);
-}
 
-function identityAliases(user: User, guildId?: string): Set<string> {
-    const names = new Set<string>();
-    const candidates = [
-        serverNickname(user.id, guildId),
-        RelationshipStore.getNickname(user.id),
-        user.globalName,
-        user.username
-    ];
 
-    for (const candidate of candidates) {
-        const value = foldText(candidate);
-        if (value) names.add(value);
-    }
-
-    return names;
-}
-
-function textMatchesAlias(text: string, alias: string): boolean {
-    if (!alias) return false;
-    if (text === alias || text.startsWith(`${alias} `) || text.startsWith(`${alias},`)) return true;
-    return [...alias].length > 2 && text.includes(alias);
-}
-
-function isAvatarLike(element: HTMLElement): boolean {
-    const rect = element.getBoundingClientRect();
-    if (rect.width < 16 || rect.width > 52 || rect.height < 16 || rect.height > 52) return false;
-
-    if (element.tagName === "IMG") return true;
-    const className = typeof element.className === "string" ? element.className : "";
-    const style = getComputedStyle(element);
-    return /avatar/i.test(className) || (style.backgroundImage !== "none" && style.backgroundImage !== "");
-}
-
-function rowHasAvatar(row: HTMLElement): boolean {
-    return [...row.querySelectorAll<HTMLElement>("img, [class*='avatar'], [style*='background-image']")]
-        .some(isAvatarLike);
-}
-
-function resolveEyeTargets(stream: ActiveBroadcast | null = getCurrentUserActiveStream()): User[] {
+function resolveEyeTargets(
+    stream: ActiveBroadcast | null = getCurrentUserActiveStream()
+): User[] {
     if (!stream) return [];
 
-    const users = getViewerIds(stream)
+    return getViewerIds(stream)
         .map(id => UserStore.getUser(id) as User | undefined)
         .filter((user): user is User => user != null);
-
-    if (runtime?.includeSelf()) {
-        const currentUser = UserStore.getCurrentUser() as User | undefined;
-        if (currentUser && !users.some(user => user.id === currentUser.id)) users.push(currentUser);
-    }
-
-    return users;
 }
 
 function isVisible(element: HTMLElement): boolean {
@@ -274,7 +176,6 @@ function findNameElement(row: HTMLElement, user: User, guildId?: string): HTMLEl
     return best?.element ?? null;
 }
 
-
 function locateCurrentStreamerLiveBadge(): LocatedVoiceRow | null {
     let best: { element: HTMLElement; score: number; } | null = null;
 
@@ -415,6 +316,31 @@ function locateVoiceRow(user: User, guildId?: string): LocatedVoiceRow | null {
     };
 }
 
+ | null {
+    const rowRect = element.getBoundingClientRect();
+    const anchors = element.querySelectorAll<HTMLElement>(
+        "img, [class*='avatar'], [style*='background-image']"
+    );
+
+    for (const anchor of anchors) {
+        if (!isVisible(anchor)) continue;
+
+        const rect = anchor.getBoundingClientRect();
+        const squareDifference = Math.abs(rect.width - rect.height);
+        const centerY = rect.top + rect.height / 2;
+
+        if (rect.width < 18 || rect.width > 44) continue;
+        if (rect.height < 18 || rect.height > 44) continue;
+        if (squareDifference > 9) continue;
+        if (rect.left < rowRect.left - 1 || rect.right > rowRect.left + 82) continue;
+        if (centerY < rowRect.top || centerY > rowRect.bottom) continue;
+
+        return { anchor, centerY };
+    }
+
+    return null;
+}
+
 function ensureVoiceLayer(): HTMLDivElement {
     const layer = document.createElement("div");
     layer.className = "vc-viewer-eyes-voice-layer";
@@ -525,31 +451,18 @@ function px(value: number): string {
     return `${Math.round(value * 100) / 100}px`;
 }
 
-
-function applyMatchingStatusColor(host: HTMLElement, anchor: HTMLElement | null): void {
-    if (!anchor?.isConnected) {
-        host.style.removeProperty("color");
-        return;
-    }
-
-    const candidates = [
-        anchor,
-        anchor.querySelector<HTMLElement>("svg"),
-        anchor.querySelector<HTMLElement>("path")
-    ].filter((element): element is HTMLElement => element != null);
-
-    for (const element of candidates) {
-        const style = getComputedStyle(element);
-        const colors = [style.color, style.stroke, style.fill];
-
-        for (const color of colors) {
-            if (!color || color === "none" || color === "currentcolor" || color === "transparent" || color === "rgba(0, 0, 0, 0)") continue;
-            host.style.color = color;
-            return;
-        }
-    }
-
-    host.style.removeProperty("color");
+function applyMatchingStatusColor(
+    host: HTMLElement,
+    _anchor: HTMLElement | null
+): void {
+    // No copiar colores de mute, deafen, actividades, insignias o LIVE:
+    // algunos iconos internos de Discord exponen negro como fill/stroke.
+    host.style.setProperty(
+        "color",
+        "#737883",
+        "important"
+    );
+    host.style.setProperty("opacity", "1", "important");
 }
 
 function setVoiceBadgeRect(
@@ -587,53 +500,89 @@ function placeVoiceBadge(
     const liveBadge = directAnchor?.isConnected
         ? directAnchor
         : findLiveBadge(row, nameElement);
-    const statusAnchor = findStatusAnchor(
-        row,
-        nameElement,
-        liveBadge
-    );
-    const liveRect = liveBadge?.getBoundingClientRect();
-    const statusRect = statusAnchor?.getBoundingClientRect();
+    const statusAnchor = findStatusAnchor(row, nameElement, liveBadge);
     const top = rowRect.top + (rowRect.height - EYE_SIZE) / 2;
-    const minimumLeft = rowRect.left + 48;
-    const maximumLeft = rowRect.right - EYE_SIZE - 6;
+    const minimumLeft = Math.max(
+        rowRect.left + 48,
+        (nameRect?.right ?? rowRect.left + 48) + 5
+    );
+    const maximumLeft = rowRect.right - EYE_SIZE - 7;
 
     applyMatchingStatusColor(host, statusAnchor);
 
-    const candidates = [
-        liveRect ? liveRect.left - EYE_GAP - EYE_SIZE : null,
-        statusRect ? statusRect.left - EYE_GAP - EYE_SIZE : null,
-        liveRect ? liveRect.right + EYE_GAP : null,
-        nameRect ? nameRect.right + 7 : null,
-        maximumLeft
-    ].filter((value): value is number => value != null);
+    const obstacleRects: DOMRect[] = [];
 
-    const obstacles = [liveRect, statusRect]
-        .filter((rect): rect is DOMRect => rect != null);
+    row.querySelectorAll<HTMLElement>(
+        "svg, [role='img'], [class*='icon'], span, div"
+    ).forEach(element => {
+        if (
+            element === row ||
+            element === host ||
+            element.closest(".vc-viewer-eyes-voice-host") ||
+            (
+                nameElement &&
+                (
+                    element === nameElement ||
+                    nameElement.contains(element) ||
+                    element.contains(nameElement)
+                )
+            )
+        ) return;
 
-    let left = candidates.find(candidate =>
-        candidate >= minimumLeft &&
-        candidate <= maximumLeft &&
-        obstacles.every(rect => !overlapsRect(candidate, top, rect))
-    );
+        const rect = element.getBoundingClientRect();
+        const text = foldText(element.textContent);
+        const iconLike =
+            element.matches("svg, [role='img'], [class*='icon']") ||
+            element.querySelector(":scope > svg") != null;
+        const compactBadge =
+            rect.width >= 14 &&
+            rect.width <= 120 &&
+            rect.height >= 12 &&
+            rect.height <= 30 &&
+            text.length > 0 &&
+            text.length <= 24;
 
-    if (left == null && liveRect) {
-        const before = liveRect.left - EYE_GAP - EYE_SIZE;
-        const after = liveRect.right + EYE_GAP;
+        if (!iconLike && !compactBadge) return;
+        if (rect.width < 8 || rect.width > 120) return;
+        if (rect.height < 8 || rect.height > 32) return;
+        if (rect.left < rowRect.left + 46 || rect.right > rowRect.right + 1) return;
+        if (rect.top < rowRect.top - 1 || rect.bottom > rowRect.bottom + 1) return;
 
-        if (before >= minimumLeft) {
-            left = before;
-        } else if (after <= maximumLeft) {
-            left = after;
+        const duplicate = obstacleRects.some(existing =>
+            Math.abs(existing.left - rect.left) < 1 &&
+            Math.abs(existing.top - rect.top) < 1 &&
+            Math.abs(existing.width - rect.width) < 1 &&
+            Math.abs(existing.height - rect.height) < 1
+        );
+
+        if (!duplicate) obstacleRects.push(rect);
+    });
+
+    const directRect = directAnchor?.getBoundingClientRect();
+    if (
+        directRect &&
+        !obstacleRects.some(rect =>
+            Math.abs(rect.left - directRect.left) < 1 &&
+            Math.abs(rect.top - directRect.top) < 1
+        )
+    ) {
+        obstacleRects.push(directRect);
+    }
+
+    let left: number | null = null;
+
+    for (
+        let candidate = Math.floor(maximumLeft);
+        candidate >= Math.ceil(minimumLeft);
+        candidate -= 1
+    ) {
+        if (obstacleRects.every(rect => !overlapsRect(candidate, top, rect, 3))) {
+            left = candidate;
+            break;
         }
     }
 
-    left ??= clamp(
-        nameRect ? nameRect.right + 7 : maximumLeft,
-        minimumLeft,
-        maximumLeft
-    );
-
+    left ??= clamp(maximumLeft, rowRect.left + 48, maximumLeft);
     setVoiceBadgeRect(host, left, top);
 }
 
@@ -680,18 +629,9 @@ function reconcileVoiceBadgesUnsafe(): void {
         string,
         { user: User; located: LocatedVoiceRow; }
     >();
-    const currentUser = UserStore.getCurrentUser() as User | undefined;
 
     for (const user of viewers) {
-        const isPreviewSelf =
-            runtime?.includeSelf() &&
-            currentUser?.id === user.id;
-        const located = isPreviewSelf
-            ? (
-                locateCurrentStreamerVoiceRow(user, stream.guildId) ??
-                locateVoiceRow(user, stream.guildId)
-            )
-            : locateVoiceRow(user, stream.guildId);
+        const located = locateVoiceRow(user, stream.guildId);
 
         if (located) {
             desired.set(user.id, { user, located });
@@ -700,12 +640,14 @@ function reconcileVoiceBadgesUnsafe(): void {
 
     const existing = new Map<string, HTMLElement>();
 
-    layer.querySelectorAll<HTMLElement>(
-        ".vc-viewer-eyes-voice-host"
-    ).forEach(host => {
-        const id = host.dataset.viewerEyesUserId;
-        if (id) existing.set(id, host);
-    });
+    layer
+        .querySelectorAll<HTMLElement>(
+            ".vc-viewer-eyes-voice-host"
+        )
+        .forEach(host => {
+            const id = host.dataset.viewerEyesUserId;
+            if (id) existing.set(id, host);
+        });
 
     const targetIds = new Set(viewers.map(user => user.id));
     const now = Date.now();
@@ -733,6 +675,7 @@ function reconcileVoiceBadgesUnsafe(): void {
         const host = existing.get(id) ?? makeVoiceBadge(user);
         const isNew = !host.isConnected;
 
+        host.dataset.viewerEyesUserId = id;
         delete host.dataset.viewerEyesMissingSince;
         updateVoiceBadgeLabel(host, user);
         placeVoiceBadge(host, located);
@@ -805,15 +748,21 @@ function detachVoiceObservation(): void {
 }
 
 function syncVoiceObservationStateUnsafe(): void {
-    const hasActiveStream = getCurrentUserActiveStream() != null;
+    const hasActiveStream =
+        getCurrentUserActiveStream() != null;
 
     if (!hasActiveStream) {
         detachVoiceObservation();
+
         if (previewPollTimer != null) {
             window.clearInterval(previewPollTimer);
             previewPollTimer = null;
         }
-        document.querySelector(".vc-viewer-eyes-voice-layer")?.remove();
+
+        document
+            .querySelector(".vc-viewer-eyes-voice-layer")
+            ?.remove();
+
         pointerX = -1;
         pointerY = -1;
         return;
@@ -821,16 +770,39 @@ function syncVoiceObservationStateUnsafe(): void {
 
     if (!voiceObserver) {
         voiceObserver = new MutationObserver(records => {
-            if (!containsOnlyVoiceBadgeMutations(records)) queueVoiceReconcile();
+            if (!containsOnlyVoiceBadgeMutations(records)) {
+                queueVoiceReconcile();
+            }
         });
-        voiceObserver.observe(document.body, { childList: true, subtree: true });
-        window.addEventListener("resize", queueVoiceReconcile);
-        window.addEventListener("scroll", queueVoiceReconcile, true);
-        document.addEventListener("pointermove", trackVoicePointer, true);
+
+        voiceObserver.observe(
+            document.body,
+            { childList: true, subtree: true }
+        );
+
+        window.addEventListener(
+            "resize",
+            queueVoiceReconcile
+        );
+
+        window.addEventListener(
+            "scroll",
+            queueVoiceReconcile,
+            true
+        );
+
+        document.addEventListener(
+            "pointermove",
+            trackVoicePointer,
+            true
+        );
     }
 
     if (previewPollTimer == null) {
-        previewPollTimer = window.setInterval(queueVoiceReconcile, 750);
+        previewPollTimer = window.setInterval(
+            queueVoiceReconcile,
+            750
+        );
     }
 
     queueVoiceReconcile();
@@ -845,50 +817,47 @@ function syncVoiceObservationState(): void {
     }
 }
 
-export function startVoiceListOverlay(options: VoiceListEyeRuntime): void {
-    if (storeUnsubscribe || voiceObserver || previewSettingListener) stopVoiceListOverlay();
-    runtime = options;
+export export function startVoiceListOverlay(): void {
+    if (storeUnsubscribe || voiceObserver) {
+        stopVoiceListOverlay();
+    }
 
     try {
-        document.querySelector(".vc-viewer-eyes-voice-layer")?.remove();
+        document
+            .querySelector(".vc-viewer-eyes-voice-layer")
+            ?.remove();
 
         markFeatureEnabled("voiceList", true);
-        storeUnsubscribe = subscribeToStreamingChanges(syncVoiceObservationState);
 
-        previewSettingListener = queueVoiceReconcile;
-        SettingsStore.addChangeListener(runtime.previewSettingPath, previewSettingListener);
+        storeUnsubscribe =
+            subscribeToStreamingChanges(
+                syncVoiceObservationState
+            );
 
         syncVoiceObservationState();
     } catch (error) {
         try {
             stopVoiceListOverlay();
         } catch {
-            // Best-effort rollback; preserve the original startup error.
+            // Preserve the original startup error.
         }
+
         throw error;
     }
 }
 
-export function stopVoiceListOverlay(): void {
+export export function stopVoiceListOverlay(): void {
     if (storeUnsubscribe) {
         try {
             storeUnsubscribe();
         } catch (error) {
             reportRuntimeError("voice.unsubscribe", error);
         }
+
         storeUnsubscribe = null;
     }
+
     markFeatureEnabled("voiceList", false);
-
-    if (previewSettingListener) {
-        try {
-            if (runtime) SettingsStore.removeChangeListener(runtime.previewSettingPath, previewSettingListener);
-        } catch (error) {
-            reportRuntimeError("voice.settings.unsubscribe", error);
-        }
-        previewSettingListener = null;
-    }
-
     detachVoiceObservation();
 
     if (previewPollTimer != null) {
@@ -901,8 +870,10 @@ export function stopVoiceListOverlay(): void {
         scheduledFrame = 0;
     }
 
-    document.querySelector(".vc-viewer-eyes-voice-layer")?.remove();
+    document
+        .querySelector(".vc-viewer-eyes-voice-layer")
+        ?.remove();
+
     pointerX = -1;
     pointerY = -1;
-    runtime = null;
 }

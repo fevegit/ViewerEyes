@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import { SettingsStore } from "@api/Settings";
 import type { User } from "@vencord/discord-types";
 import { RelationshipStore, UserStore } from "@webpack/common";
 import { t } from "./i18n";
@@ -19,7 +20,13 @@ import {
     updateFeatureHealth
 } from "./runtime";
 
-export
+export interface EyeOverlayRuntime {
+    includeSelf(): boolean;
+    previewSettingPath: string;
+}
+
+let runtime: EyeOverlayRuntime | null = null;
+
 function displayName(user: User): string {
     return RelationshipStore.getNickname(user.id) || user.globalName || user.username;
 }
@@ -31,10 +38,17 @@ function resolveActiveViewers(stream: ActiveBroadcast | null = getCurrentUserAct
         .filter((user): user is User => user != null);
 }
 
-function resolveEyeTargets(
-    stream: ActiveBroadcast | null = getCurrentUserActiveStream()
-): User[] {
-    return resolveActiveViewers(stream);
+function resolveEyeTargets(stream: ActiveBroadcast | null = getCurrentUserActiveStream()): User[] {
+    const users = resolveActiveViewers(stream);
+
+    if (runtime?.includeSelf()) {
+        const currentUser = UserStore.getCurrentUser() as User | undefined;
+        if (currentUser && !users.some(user => user.id === currentUser.id)) {
+            users.push(currentUser);
+        }
+    }
+
+    return users;
 }
 
 const CALL_ROOT_SELECTORS = [
@@ -876,6 +890,7 @@ function queueTransitionChecks(): void {
 
 let tileObserver: MutationObserver | null = null;
 let storeUnsubscribe: (() => void) | null = null;
+let previewSettingListener: (() => void) | null = null;
 let scheduledFrame = 0;
 let transitionFrame = 0;
 let transitionFollowUntil = 0;
@@ -994,50 +1009,56 @@ function syncObservationState(): void {
     }
 }
 
-export export function startEyeOverlay(): void {
-    if (storeUnsubscribe || tileObserver) stopEyeOverlay();
+export function startEyeOverlay(options: EyeOverlayRuntime): void {
+    if (storeUnsubscribe || tileObserver || previewSettingListener) stopEyeOverlay();
+    runtime = options;
 
     try {
-        document
-            .querySelectorAll<HTMLElement>(".vc-viewer-eyes-host")
-            .forEach(removeBadgeHost);
-        document
-            .querySelectorAll(".vc-viewer-eyes-layer")
-            .forEach(element => element.remove());
-
+        // Limpia cualquier modificación residual de versiones anteriores antes de observar.
+        document.querySelectorAll<HTMLElement>(".vc-viewer-eyes-host").forEach(removeBadgeHost);
+        document.querySelectorAll(".vc-viewer-eyes-layer").forEach(element => element.remove());
         restorePatchedTilePositions();
         loadCachedControlAppearance();
         cachedControlGeometry.clear();
         clearOldMarkers();
-        markFeatureEnabled("tile", true);
 
-        storeUnsubscribe =
-            subscribeToStreamingChanges(syncObservationState);
+        markFeatureEnabled("tile", true);
+        storeUnsubscribe = subscribeToStreamingChanges(syncObservationState);
+
+        previewSettingListener = queueReconcile;
+        SettingsStore.addChangeListener(runtime.previewSettingPath, previewSettingListener);
 
         syncObservationState();
     } catch (error) {
         try {
             stopEyeOverlay();
         } catch {
-            // Preserve the original startup error.
+            // Best-effort rollback; preserve the original startup error.
         }
-
         throw error;
     }
 }
 
-export export function stopEyeOverlay(): void {
+export function stopEyeOverlay(): void {
     if (storeUnsubscribe) {
         try {
             storeUnsubscribe();
         } catch (error) {
             reportRuntimeError("tile.unsubscribe", error);
         }
-
         storeUnsubscribe = null;
     }
-
     markFeatureEnabled("tile", false);
+
+    if (previewSettingListener) {
+        try {
+            if (runtime) SettingsStore.removeChangeListener(runtime.previewSettingPath, previewSettingListener);
+        } catch (error) {
+            reportRuntimeError("tile.settings.unsubscribe", error);
+        }
+        previewSettingListener = null;
+    }
+
     detachTileObservation();
     pointerX = -1;
     pointerY = -1;
@@ -1047,13 +1068,11 @@ export export function stopEyeOverlay(): void {
         scheduledFrame = 0;
     }
 
-    document
-        .querySelectorAll<HTMLElement>(".vc-viewer-eyes-host")
-        .forEach(removeBadgeHost);
-
+    document.querySelectorAll<HTMLElement>(".vc-viewer-eyes-host").forEach(removeBadgeHost);
     document.querySelector(".vc-viewer-eyes-layer")?.remove();
     restorePatchedTilePositions();
     cachedControlAppearance = null;
     cachedControlGeometry.clear();
     clearOldMarkers();
+    runtime = null;
 }

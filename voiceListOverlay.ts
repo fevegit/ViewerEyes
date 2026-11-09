@@ -1,16 +1,166 @@
+/*
+ * ViewerEyes - voice channel list badge overlay
+ * Copyright (c) 2026 feve
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+import { SettingsStore } from "@api/Settings";
+import type { User } from "@vencord/discord-types";
+import { ChannelStore, RelationshipStore, SelectedChannelStore, UserStore, VoiceStateStore } from "@webpack/common";
+import { t } from "./i18n";
+
+import {
+    type ActiveBroadcast,
+    getCurrentUserActiveStream,
+    getServerNickname,
+    getViewerIds,
+    markFeatureEnabled,
+    reportRuntimeError,
+    subscribeToStreamingChanges,
+    updateFeatureHealth
+} from "./runtime";
+
+export interface VoiceListEyeRuntime {
+    includeSelf(): boolean;
+    previewSettingPath: string;
+}
+
+interface LocatedVoiceRow {
+    row: HTMLElement;
+    nameElement: HTMLElement | null;
+    directAnchor?: HTMLElement;
+}
+
+const LEFT_SIDEBAR_LIMIT = 620;
+const EYE_SIZE = 16;
+const EYE_GAP = 5;
+const ROW_MISS_GRACE_MS = 1_800;
+
+let runtime: VoiceListEyeRuntime | null = null;
+let voiceObserver: MutationObserver | null = null;
+let storeUnsubscribe: (() => void) | null = null;
+let previewSettingListener: (() => void) | null = null;
+let previewPollTimer: number | null = null;
+let scheduledFrame = 0;
+let pointerX = -1;
+let pointerY = -1;
+
+function foldText(value: string | null | undefined): string {
+    return value?.trim().toLocaleLowerCase() ?? "";
+}
 
 
+function displayName(user: User): string {
+    return RelationshipStore.getNickname(user.id) || user.globalName || user.username;
+}
 
+function serverNickname(userId: string, guildId?: string): string | undefined {
+    return getServerNickname(guildId, userId);
+}
 
+function identityAliases(user: User, guildId?: string): Set<string> {
+    const names = new Set<string>();
+    const candidates = [
+        serverNickname(user.id, guildId),
+        RelationshipStore.getNickname(user.id),
+        user.globalName,
+        user.username
+    ];
+
+    for (const candidate of candidates) {
+        const value = foldText(candidate);
+        if (value) names.add(value);
+    }
+
+    return names;
+}
+
+function textMatchesAlias(text: string, alias: string): boolean {
+    if (!alias) return false;
+    if (text === alias || text.startsWith(`${alias} `) || text.startsWith(`${alias},`)) return true;
+    return [...alias].length > 2 && text.includes(alias);
+}
+
+function isAvatarLike(element: HTMLElement): boolean {
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 16 || rect.width > 52 || rect.height < 16 || rect.height > 52) return false;
+
+    if (element.tagName === "IMG") return true;
+    const className = typeof element.className === "string" ? element.className : "";
+    const style = getComputedStyle(element);
+    return /avatar/i.test(className) || (style.backgroundImage !== "none" && style.backgroundImage !== "");
+}
+
+function rowHasAvatar(row: HTMLElement): boolean {
+    return [...row.querySelectorAll<HTMLElement>("img, [class*='avatar'], [style*='background-image']")]
+        .some(isAvatarLike);
+}
+
+/* VIEWEREYES_DEMO_ALL_VOICE_USERS_TEST
+ * En modo demo, todos los usuarios del canal de voz actual son objetivos.
+ * Esto permite comprobar de forma determinista cada fila y cada rerender de Discord.
+ */
+function currentVoiceGuildId(): string | undefined {
+    const channelId = SelectedChannelStore.getVoiceChannelId();
+    if (!channelId) return undefined;
+
+    const channel = ChannelStore.getChannel(channelId) as {
+        guild_id?: string;
+        guildId?: string;
+    } | null | undefined;
+
+    return channel?.guild_id ?? channel?.guildId;
+}
+
+function resolveDemoVoiceUsers(): User[] {
+    if (runtime?.includeSelf() !== true) return [];
+
+    const channelId = SelectedChannelStore.getVoiceChannelId();
+    if (!channelId) return [];
+
+    const voiceStates = VoiceStateStore.getVoiceStatesForChannel(channelId) as
+        | Record<string, { userId?: string; }>
+        | null
+        | undefined;
+
+    if (!voiceStates) return [];
+
+    const users: User[] = [];
+    const seen = new Set<string>();
+
+    for (const [stateKey, state] of Object.entries(voiceStates)) {
+        const userId = state?.userId ?? stateKey;
+        if (!userId || seen.has(userId)) continue;
+
+        const user = UserStore.getUser(userId) as User | undefined;
+        if (!user) continue;
+
+        seen.add(userId);
+        users.push(user);
+    }
+
+    return users;
+}
 
 function resolveEyeTargets(
     stream: ActiveBroadcast | null = getCurrentUserActiveStream()
 ): User[] {
-    if (!stream) return [];
+    const users = stream
+        ? getViewerIds(stream)
+            .map(id => UserStore.getUser(id) as User | undefined)
+            .filter((user): user is User => user != null)
+        : [];
 
-    return getViewerIds(stream)
-        .map(id => UserStore.getUser(id) as User | undefined)
-        .filter((user): user is User => user != null);
+    const seen = new Set(users.map(user => user.id));
+
+    for (const demoUser of resolveDemoVoiceUsers()) {
+        if (seen.has(demoUser.id)) continue;
+
+        seen.add(demoUser.id);
+        users.push(demoUser);
+    }
+
+    return users;
 }
 
 function isVisible(element: HTMLElement): boolean {
@@ -173,8 +323,9 @@ function findNameElement(row: HTMLElement, user: User, guildId?: string): HTMLEl
         if (!best || score > best.score) best = { element, score };
     });
 
-    return best?.element ?? null;
+    return (best as { element: HTMLElement } | null)?.element ?? null;
 }
+
 
 function locateCurrentStreamerLiveBadge(): LocatedVoiceRow | null {
     let best: { element: HTMLElement; score: number; } | null = null;
@@ -199,9 +350,9 @@ function locateCurrentStreamerLiveBadge(): LocatedVoiceRow | null {
     if (!best) return null;
 
     return {
-        row: best.element.parentElement ?? best.element,
+        row: (best as { element: HTMLElement }).element.parentElement ?? (best as { element: HTMLElement }).element,
         nameElement: null,
-        directAnchor: best.element
+        directAnchor: (best as { element: HTMLElement }).element
     };
 }
 
@@ -256,7 +407,7 @@ function locateCurrentStreamerVoiceRow(user: User, guildId?: string): LocatedVoi
     });
 
     if (!best) return locateCurrentStreamerLiveBadge();
-    return { row: best.row, nameElement: best.nameElement };
+    return { row: (best as { row: HTMLElement; nameElement: HTMLElement | null }).row, nameElement: (best as { row: HTMLElement; nameElement: HTMLElement | null }).nameElement };
 }
 
 function locateVoiceRowByExactText(user: User, guildId?: string): LocatedVoiceRow | null {
@@ -286,7 +437,7 @@ function locateVoiceRowByExactText(user: User, guildId?: string): LocatedVoiceRo
     });
 
     if (!best) return null;
-    return { row: best.row, nameElement: best.nameElement };
+    return { row: (best as { row: HTMLElement; nameElement: HTMLElement }).row, nameElement: (best as { row: HTMLElement; nameElement: HTMLElement }).nameElement };
 }
 
 function locateVoiceRow(user: User, guildId?: string): LocatedVoiceRow | null {
@@ -316,7 +467,17 @@ function locateVoiceRow(user: User, guildId?: string): LocatedVoiceRow | null {
     };
 }
 
- | null {
+/* VIEWEREYES_VOICE_ROWS_V4_TEST
+ * El modo demo descubre todas las filas visibles directamente en el DOM.
+ * Así no depende de que Discord exponga el ID o el apodo de cada usuario.
+ */
+/* VIEWEREYES_VOICE_ROW_CENTERS_V5_TEST
+ * Cada fila se identifica por el centro vertical de su avatar.
+ * Las filas altas por actividades, etiquetas o LIVE ya no absorben a sus vecinas.
+ */
+function rowAvatarGeometry(
+    element: HTMLElement
+): { anchor: HTMLElement; centerY: number; } | null {
     const rowRect = element.getBoundingClientRect();
     const anchors = element.querySelectorAll<HTMLElement>(
         "img, [class*='avatar'], [style*='background-image']"
@@ -339,6 +500,274 @@ function locateVoiceRow(user: User, guildId?: string): LocatedVoiceRow | null {
     }
 
     return null;
+}
+
+/* VIEWEREYES_VOICE_SCOPE_COLOR_V6_TEST
+ * El modo demo sigue funcionando sin compartir pantalla, pero las filas
+ * solo se aceptan dentro del bloque visible del canal de voz seleccionado.
+ */
+interface CurrentVoiceSectionBounds {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+}
+
+function currentVoiceSectionBounds(): CurrentVoiceSectionBounds | null {
+    const channelId = SelectedChannelStore.getVoiceChannelId();
+
+    if (!channelId) return null;
+
+    const escapedId = CSS.escape(channelId);
+    const possibleHeaders = document.querySelectorAll<HTMLElement>(
+        `[data-list-item-id*="${escapedId}"], [data-channel-id="${escapedId}"]`
+    );
+    let bestHeader: { element: HTMLElement; score: number; } | null = null;
+
+    possibleHeaders.forEach(candidate => {
+        let element: HTMLElement | null =
+            candidate.closest<HTMLElement>(
+                "[data-list-item-id^='channels___'], [data-channel-id]"
+            ) ?? candidate;
+        let depth = 0;
+
+        while (element && depth < 5) {
+            if (isInsideLeftSidebarGeometry(element)) {
+                const rect = element.getBoundingClientRect();
+                const itemId = element.getAttribute("data-list-item-id") ?? "";
+                const channelAttribute = element.getAttribute("data-channel-id");
+                const containsId =
+                    itemId.includes(channelId) ||
+                    channelAttribute === channelId;
+
+                if (
+                    containsId &&
+                    rect.width >= 150 &&
+                    rect.width <= 430 &&
+                    rect.height >= 24 &&
+                    rect.height <= 64
+                ) {
+                    const score =
+                        (itemId.startsWith("channels___") ? 200 : 0) +
+                        (channelAttribute === channelId ? 120 : 0) +
+                        100 -
+                        Math.abs(rect.height - 36) * 4 -
+                        depth * 8;
+
+                    if (!bestHeader || score > bestHeader.score) {
+                        bestHeader = {
+                            element,
+                            score
+                        };
+                    }
+                }
+            }
+
+            element = element.parentElement;
+            depth += 1;
+        }
+    });
+
+    if (!bestHeader) return null;
+
+    const headerRect = (bestHeader as { element: HTMLElement }).element.getBoundingClientRect();
+    let bottom = window.innerHeight;
+
+    document.querySelectorAll<HTMLElement>(
+        "[data-list-item-id^='channels___']"
+    ).forEach(element => {
+        if (element === bestHeader!.element || !isVisible(element)) return;
+
+        const rect = element.getBoundingClientRect();
+        const sameColumn =
+            rect.left < headerRect.right &&
+            rect.right > headerRect.left;
+
+        if (
+            sameColumn &&
+            rect.top > headerRect.bottom + 2 &&
+            rect.top < bottom
+        ) {
+            bottom = rect.top;
+        }
+    });
+
+    document.querySelectorAll<HTMLElement>("[class*='panels']").forEach(panel => {
+        if (!isVisible(panel)) return;
+
+        const rect = panel.getBoundingClientRect();
+        const sameColumn =
+            rect.left < headerRect.right &&
+            rect.right > headerRect.left;
+
+        if (
+            sameColumn &&
+            rect.top > headerRect.bottom &&
+            rect.top < bottom
+        ) {
+            bottom = rect.top;
+        }
+    });
+
+    if (bottom <= headerRect.bottom + 18) return null;
+
+    return {
+        left: headerRect.left - 6,
+        right: headerRect.right + 6,
+        top: headerRect.bottom - 2,
+        bottom
+    };
+}
+
+function isInsideCurrentVoiceSection(
+    element: HTMLElement,
+    bounds: CurrentVoiceSectionBounds
+): boolean {
+    if (!isVisible(element)) return false;
+
+    const rect = element.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
+    return (
+        centerX >= bounds.left &&
+        centerX <= bounds.right &&
+        centerY >= bounds.top &&
+        centerY < bounds.bottom
+    );
+}
+
+function isGenericVoiceRowCandidate(element: HTMLElement): boolean {
+    const bounds = currentVoiceSectionBounds();
+
+    if (
+        !bounds ||
+        !isInsideCurrentVoiceSection(element, bounds) ||
+        !isInsideLeftSidebarGeometry(element)
+    ) {
+        return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const ratio = rect.width / Math.max(1, rect.height);
+
+    if (rect.width < 150 || rect.width > 430) return false;
+    if (rect.height < 24 || rect.height > 58) return false;
+    if (ratio < 3) return false;
+    if (element.querySelector("video, canvas")) return false;
+
+    return rowAvatarGeometry(element) != null;
+}
+
+function locateVisibleVoiceRows(): LocatedVoiceRow[] {
+    type Candidate = {
+        row: HTMLElement;
+        centerY: number;
+        score: number;
+    };
+
+    const bounds = currentVoiceSectionBounds();
+
+    if (!bounds) return [];
+
+    const candidates: Candidate[] = [];
+    const anchors = document.querySelectorAll<HTMLElement>(
+        "img, [class*='avatar'], [style*='background-image']"
+    );
+
+    anchors.forEach(anchor => {
+        if (
+            !isInsideCurrentVoiceSection(anchor, bounds) ||
+            !isInsideLeftChannelSidebar(anchor)
+        ) {
+            return;
+        }
+
+        const anchorRect = anchor.getBoundingClientRect();
+        const centerY = anchorRect.top + anchorRect.height / 2;
+
+        if (anchorRect.width < 18 || anchorRect.width > 44) return;
+        if (anchorRect.height < 18 || anchorRect.height > 44) return;
+        if (Math.abs(anchorRect.width - anchorRect.height) > 9) return;
+
+        let element: HTMLElement | null = anchor;
+        let depth = 0;
+        let best: Candidate | null = null;
+
+        while (element && depth < 14) {
+            if (isGenericVoiceRowCandidate(element)) {
+                const rect = element.getBoundingClientRect();
+                const avatar = rowAvatarGeometry(element);
+
+                if (avatar && Math.abs(avatar.centerY - centerY) <= 5) {
+                    const preferredHeightPenalty =
+                        Math.abs(rect.height - 32) * 24;
+                    const tallPenalty = rect.height > 46
+                        ? (rect.height - 46) * 70 + 350
+                        : 0;
+                    const widthReward =
+                        Math.min(rect.width, 330) * 0.45;
+                    const roleBonus = element.matches(
+                        "[role='button'], [role='treeitem'], [role='listitem']"
+                    ) ? 12 : 0;
+                    const score =
+                        1400 +
+                        widthReward +
+                        roleBonus -
+                        preferredHeightPenalty -
+                        tallPenalty -
+                        depth * 3;
+
+                    if (!best || score > best.score) {
+                        best = {
+                            row: element,
+                            centerY,
+                            score
+                        };
+                    }
+                }
+            }
+
+            element = element.parentElement;
+            depth += 1;
+        }
+
+        if (best) candidates.push(best);
+    });
+
+    const groups: Array<{
+        centerY: number;
+        candidate: Candidate;
+    }> = [];
+
+    candidates
+        .sort((a, b) => a.centerY - b.centerY || b.score - a.score)
+        .forEach(candidate => {
+            const group = groups.find(
+                existing =>
+                    Math.abs(existing.centerY - candidate.centerY) <= 5
+            );
+
+            if (!group) {
+                groups.push({
+                    centerY: candidate.centerY,
+                    candidate
+                });
+                return;
+            }
+
+            if (candidate.score > group.candidate.score) {
+                group.centerY = candidate.centerY;
+                group.candidate = candidate;
+            }
+        });
+
+    return groups
+        .sort((a, b) => a.centerY - b.centerY)
+        .map(({ candidate }) => ({
+            row: candidate.row,
+            nameElement: null
+        }));
 }
 
 function ensureVoiceLayer(): HTMLDivElement {
@@ -423,7 +852,7 @@ function findStatusAnchor(
         }
     });
 
-    return best?.element ?? null;
+    return (best as { element: HTMLElement } | null)?.element ?? null;
 }
 
 function findLiveBadge(row: HTMLElement, nameElement: HTMLElement | null): HTMLElement | null {
@@ -440,7 +869,7 @@ function findLiveBadge(row: HTMLElement, nameElement: HTMLElement | null): HTMLE
         if (!best || rect.left < best.left) best = { element, left: rect.left };
     });
 
-    return best?.element ?? null;
+    return (best as { element: HTMLElement } | null)?.element ?? null;
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -450,6 +879,7 @@ function clamp(value: number, minimum: number, maximum: number): number {
 function px(value: number): string {
     return `${Math.round(value * 100) / 100}px`;
 }
+
 
 function applyMatchingStatusColor(
     host: HTMLElement,
@@ -605,16 +1035,17 @@ function trackVoicePointer(event: PointerEvent): void {
 
 function reconcileVoiceBadgesUnsafe(): void {
     const stream = getCurrentUserActiveStream();
-    const viewers = stream ? resolveEyeTargets(stream) : [];
+    const isDemo = runtime?.includeSelf() === true;
+    const viewers = resolveEyeTargets(stream);
     let layer = document.querySelector<HTMLDivElement>(
         ".vc-viewer-eyes-voice-layer"
     );
 
-    if (!stream || !viewers.length) {
+    if ((!stream && !isDemo) || (!viewers.length && !isDemo)) {
         layer?.remove();
 
         updateFeatureHealth("voiceList", {
-            active: stream != null,
+            active: stream != null || isDemo,
             viewerCount: viewers.length,
             targetsFound: 0,
             surfacesFound: 0
@@ -629,27 +1060,40 @@ function reconcileVoiceBadgesUnsafe(): void {
         string,
         { user: User; located: LocatedVoiceRow; }
     >();
+    const currentUser = UserStore.getCurrentUser() as User | undefined;
+    const guildId = stream?.guildId ?? currentVoiceGuildId();
 
-    for (const user of viewers) {
-        const located = locateVoiceRow(user, stream.guildId);
+    if (isDemo) {
+        const rows = locateVisibleVoiceRows();
+        const labelUsers = viewers.length
+            ? viewers
+            : currentUser
+                ? [currentUser]
+                : [];
 
-        if (located) {
-            desired.set(user.id, { user, located });
+        rows.forEach((located, index) => {
+            const user = labelUsers[index % Math.max(1, labelUsers.length)];
+            if (!user) return;
+
+            desired.set(`demo-row-${index}`, { user, located });
+        });
+    } else {
+        for (const user of viewers) {
+            const located = locateVoiceRow(user, guildId);
+            if (located) desired.set(user.id, { user, located });
         }
     }
 
     const existing = new Map<string, HTMLElement>();
 
-    layer
-        .querySelectorAll<HTMLElement>(
-            ".vc-viewer-eyes-voice-host"
-        )
-        .forEach(host => {
-            const id = host.dataset.viewerEyesUserId;
-            if (id) existing.set(id, host);
-        });
+    layer.querySelectorAll<HTMLElement>(
+        ".vc-viewer-eyes-voice-host"
+    ).forEach(host => {
+        const id = host.dataset.viewerEyesUserId;
+        if (id) existing.set(id, host);
+    });
 
-    const targetIds = new Set(viewers.map(user => user.id));
+    const targetIds = new Set(desired.keys());
     const now = Date.now();
 
     for (const [id, host] of existing) {
@@ -704,8 +1148,8 @@ function reconcileVoiceBadgesUnsafe(): void {
     }
 
     updateFeatureHealth("voiceList", {
-        active: true,
-        viewerCount: viewers.length,
+        active: stream != null || isDemo,
+        viewerCount: isDemo ? desired.size : viewers.length,
         targetsFound: renderedCount,
         surfacesFound: renderedCount > 0 ? 1 : 0
     });
@@ -748,21 +1192,17 @@ function detachVoiceObservation(): void {
 }
 
 function syncVoiceObservationStateUnsafe(): void {
-    const hasActiveStream =
-        getCurrentUserActiveStream() != null;
+    const shouldObserve =
+        getCurrentUserActiveStream() != null ||
+        runtime?.includeSelf() === true;
 
-    if (!hasActiveStream) {
+    if (!shouldObserve) {
         detachVoiceObservation();
-
         if (previewPollTimer != null) {
             window.clearInterval(previewPollTimer);
             previewPollTimer = null;
         }
-
-        document
-            .querySelector(".vc-viewer-eyes-voice-layer")
-            ?.remove();
-
+        document.querySelector(".vc-viewer-eyes-voice-layer")?.remove();
         pointerX = -1;
         pointerY = -1;
         return;
@@ -770,39 +1210,16 @@ function syncVoiceObservationStateUnsafe(): void {
 
     if (!voiceObserver) {
         voiceObserver = new MutationObserver(records => {
-            if (!containsOnlyVoiceBadgeMutations(records)) {
-                queueVoiceReconcile();
-            }
+            if (!containsOnlyVoiceBadgeMutations(records)) queueVoiceReconcile();
         });
-
-        voiceObserver.observe(
-            document.body,
-            { childList: true, subtree: true }
-        );
-
-        window.addEventListener(
-            "resize",
-            queueVoiceReconcile
-        );
-
-        window.addEventListener(
-            "scroll",
-            queueVoiceReconcile,
-            true
-        );
-
-        document.addEventListener(
-            "pointermove",
-            trackVoicePointer,
-            true
-        );
+        voiceObserver.observe(document.body, { childList: true, subtree: true });
+        window.addEventListener("resize", queueVoiceReconcile);
+        window.addEventListener("scroll", queueVoiceReconcile, true);
+        document.addEventListener("pointermove", trackVoicePointer, true);
     }
 
     if (previewPollTimer == null) {
-        previewPollTimer = window.setInterval(
-            queueVoiceReconcile,
-            750
-        );
+        previewPollTimer = window.setInterval(queueVoiceReconcile, 750);
     }
 
     queueVoiceReconcile();
@@ -817,47 +1234,50 @@ function syncVoiceObservationState(): void {
     }
 }
 
-export export function startVoiceListOverlay(): void {
-    if (storeUnsubscribe || voiceObserver) {
-        stopVoiceListOverlay();
-    }
+export function startVoiceListOverlay(options: VoiceListEyeRuntime): void {
+    if (storeUnsubscribe || voiceObserver || previewSettingListener) stopVoiceListOverlay();
+    runtime = options;
 
     try {
-        document
-            .querySelector(".vc-viewer-eyes-voice-layer")
-            ?.remove();
+        document.querySelector(".vc-viewer-eyes-voice-layer")?.remove();
 
         markFeatureEnabled("voiceList", true);
+        storeUnsubscribe = subscribeToStreamingChanges(syncVoiceObservationState);
 
-        storeUnsubscribe =
-            subscribeToStreamingChanges(
-                syncVoiceObservationState
-            );
+        previewSettingListener = syncVoiceObservationState;
+        SettingsStore.addChangeListener(runtime.previewSettingPath, previewSettingListener);
 
         syncVoiceObservationState();
     } catch (error) {
         try {
             stopVoiceListOverlay();
         } catch {
-            // Preserve the original startup error.
+            // Best-effort rollback; preserve the original startup error.
         }
-
         throw error;
     }
 }
 
-export export function stopVoiceListOverlay(): void {
+export function stopVoiceListOverlay(): void {
     if (storeUnsubscribe) {
         try {
             storeUnsubscribe();
         } catch (error) {
             reportRuntimeError("voice.unsubscribe", error);
         }
-
         storeUnsubscribe = null;
     }
-
     markFeatureEnabled("voiceList", false);
+
+    if (previewSettingListener) {
+        try {
+            if (runtime) SettingsStore.removeChangeListener(runtime.previewSettingPath, previewSettingListener);
+        } catch (error) {
+            reportRuntimeError("voice.settings.unsubscribe", error);
+        }
+        previewSettingListener = null;
+    }
+
     detachVoiceObservation();
 
     if (previewPollTimer != null) {
@@ -870,10 +1290,11 @@ export export function stopVoiceListOverlay(): void {
         scheduledFrame = 0;
     }
 
-    document
-        .querySelector(".vc-viewer-eyes-voice-layer")
-        ?.remove();
-
+    document.querySelector(".vc-viewer-eyes-voice-layer")?.remove();
     pointerX = -1;
     pointerY = -1;
+    runtime = null;
 }
+/* VIEWEREYES_VOICE_COLOR_V7_TEST
+ * Color fijo igualado a los iconos de estado de Discord: #737883.
+ */

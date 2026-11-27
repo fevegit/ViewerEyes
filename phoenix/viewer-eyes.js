@@ -1,5 +1,5 @@
 // @description Shows viewers of your own Discord stream. Experimental Phoenix port.
-// @version 0.1.0-alpha.1
+// @version 0.1.0-alpha.2
 // @author feve
 // @gateway ready streamCreate streamUpdate streamDelete voiceStateUpdate
 // @discord GET /users/@me
@@ -26,13 +26,20 @@
   let opening = 0, identityEpoch = 0;
   const cleanup = [];
   const text = (en, es) => settings.language === "es" ? es : en;
+  const demoCount = () => Math.max(1, Math.min(30, Math.round(Number(settings.demoViewerCount) || 1)));
+  const demoTargets = () => new Set([self, ...String(settings.demoUserIds || "").split(/[\s,;]+/)].filter(validId).slice(0, 31));
+  function previewChanged() {
+    closePage();
+    syncUi(viewers);
+    try { decoration?.update?.(); } catch {}
+  }
   function closePage() {
     if (page) { try { page.close(); } catch {} page = null; }
   }
   function syncUi(old) {
     revision++;
     if (button) {
-      try { button.update({ label: known ? `ViewerEyes · ${viewers.size}` : "ViewerEyes" }); } catch {}
+      try { button.update({ label: settings.demoMode ? `ViewerEyes · DEMO ${demoCount()}` : known ? `ViewerEyes · ${viewers.size}` : "ViewerEyes" }); } catch {}
     }
     if (decoration) {
       for (const id of new Set([...old, ...viewers])) {
@@ -48,7 +55,7 @@
   }
   function setSelf(id) {
     if (!validId(id)) return;
-    if (id !== self) { clear(); self = id; }
+    if (id !== self) { clear(); self = id; if (settings.demoMode) previewChanged(); }
   }
   function stream(kind, p) {
     if (disposed || !p || typeof p !== "object") return;
@@ -92,10 +99,11 @@
   }
   function status() {
     return [
-      `ViewerEyes 0.1.0-alpha.1`,
+      `ViewerEyes 0.1.0-alpha.2`,
       `Identity: ${self ? "ready" : "unavailable"}`,
       `Active own stream: ${active ? "yes" : "not observed"}`,
       `Audience: ${known ? viewers.size : "unknown"}`,
+      `Demo mode: ${settings.demoMode ? "on" : "off"} (simulated data only)`,
       ...Object.keys(counts).map(k => `${k}: ${available[k] ? "available" : "unavailable"}; events=${counts[k]}`),
       `Member decoration: ${decoration ? "enabled (general member/DM list)" : "disabled"}`,
       "Call tiles / voice rows: not implemented"
@@ -107,8 +115,8 @@
     if (on && !decoration && typeof phoenix.ui.addMemberDecoration === "function") {
       try {
         decoration = phoenix.ui.addMemberDecoration({
-          render: ({ userId }) => known && viewers.has(userId) ?
-            { text: "👁", icons: [{ svg: eye, color: 0xffb5bac1 }] } : null
+          render: ({ userId }) => (settings.demoMode ? demoTargets().has(userId) : known && viewers.has(userId)) ?
+            { text: settings.demoMode ? "👁 DEMO" : "👁", icons: [{ svg: eye, color: settings.demoMode ? 0xfff0b232 : 0xffb5bac1 }] } : null
         });
       } catch { phoenix.log.warn("ViewerEyes: member decoration unavailable"); }
     }
@@ -129,6 +137,17 @@
   async function showAudience() {
     const request = ++opening;
     closePage();
+    if (settings.demoMode) {
+      const count = demoCount();
+      const mockNames = ["Nova", "Pixel", "Echo", "Luna", "Kai", "Nox", "Mira", "Iris", "Axel", "Sora"];
+      const names = [text("You (demo)", "Tú (demo)"), ...Array.from({length: count - 1}, (_, i) => mockNames[i % mockNames.length] + " " + (i + 1))];
+      page = phoenix.ui.openPage({ title: "ViewerEyes · DEMO", sections: [
+        {type:"text", title: text("Simulated audience", "Audiencia simulada"), text: text("Preview only. These are not real viewers.", "Solo vista previa. No son espectadores reales.")},
+        {type:"text", title: count + " " + text("demo viewers", "espectadores simulados"), text: names.map(n => "👁  " + n).join("\n")},
+        {type:"buttons", buttons:[{label:text("Refresh","Actualizar"), onPress:()=>{void showAudience();}}]}
+      ] });
+      return;
+    }
     const snapshot = revision;
     const ids = known ? [...viewers] : [];
     const guild = active?.guild;
@@ -162,6 +181,9 @@
   const settings = phoenix.settings.define({
     language: { type: "select", title: "Language / Idioma", default: "en", options: [{value:"en",label:"English"},{value:"es",label:"Español"}] },
     memberEyes: { type: "switch", title: "Experimental member list eyes / Ojos experimentales", description: "General member/DM list only; not voice rows or call tiles.", default: false, onChange: syncDecoration },
+    demoMode: { type: "switch", title: "Demo Mode / Modo demo", description: "Simulated panel and amber eyes for yourself and optional demo user IDs. No stream needed.", default: false, onChange: previewChanged },
+    demoViewerCount: { type: "number", title: "Demo viewers / Espectadores demo", description: "1–30, including yourself.", default: 5, onChange: previewChanged },
+    demoUserIds: { type: "text", title: "Demo user IDs / IDs de prueba", description: "Optional Discord user IDs, separated by spaces. Used only for experimental member-list eyes in Demo Mode.", default: "", onChange: previewChanged },
     audience: { type: "button", title: "Open audience / Abrir espectadores", onPress: () => { void showAudience().catch(() => phoenix.ui.toast("ViewerEyes: UI unavailable")); } },
     diagnostics: { type: "button", title: "Diagnostics / Diagnóstico", onPress: showDiagnostics }
   });
@@ -188,6 +210,7 @@
     cleanup.push(() => button?.());
   } catch { phoenix.log.warn("ViewerEyes: header button unavailable"); }
   syncDecoration(settings.memberEyes);
+  if (settings.demoMode) previewChanged();
   phoenix.onUnload(() => {
     disposed = true; opening++;
     closePage();
@@ -195,5 +218,5 @@
     if (decoration) { try { decoration(); } catch {} decoration = null; }
     viewers.clear(); active = null; self = null;
   });
-  phoenix.log.info("ViewerEyes 0.1.0-alpha.1 loaded", Object.keys(available).filter(k => available[k]).join(", "));
+  phoenix.log.info("ViewerEyes 0.1.0-alpha.2 loaded", Object.keys(available).filter(k => available[k]).join(", "));
 })(phoenix);

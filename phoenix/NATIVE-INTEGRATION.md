@@ -18,6 +18,19 @@ Static labels are not proof of the intended UI surface, participant identity, AB
 
 Two short observation runs installed and removed all three observers successfully; all counters were zero. Second run lasted approximately two seconds. This is inconclusive, not proof that the functions never run. No persistent hook or runtime binary changes were made.
 
+## Subsequent dynamic validation
+
+- A forced redraw without changing the visible surface also yielded zero hits. This was inconclusive.
+- During actual navigation (switching servers, returning to the existing call and opening its large view while sharing the screen), the avatar renderer at RVA `0x393c2b0` recorded 11 hits; both voice-row candidates recorded zero. All three observers were removed successfully.
+- A second limited trace recorded five avatar calls, all returning to RVA `0x50f34c3`, within function `0x50f33d0..0x50f3536`. The temporary observer was removed (true).
+- Static inspection found a pointer to the avatar function at `0x16384830` and a pointer to the intermediary at `0x149da328`. Neither establishes the participant ID or a safe GPUI insertion site. The intermediary appears to return a 40-byte element; its exact type/ABI remains unverified.
+- The global at `0x17e47cf0` has many unrelated references and is not a useful call-tile-specific anchor. Do not pursue it without new evidence.
+- These RVAs apply only to the examined executable, not future builds. Do not install persistent hooks using them.
+
+## Resume checkpoint
+
+Paused by request on 2026-11-27, pending improved Sunbird/Phoenix desktop UI support. Preserve ViewerEyes alpha.2 and the original Vencord implementation. On resumption, first inspect upstream API and release changes for native voice-user and call-tile decoration support; prefer supported APIs over further manual binary reversing. Do not interpret the 11 avatar hits as proof of safe insertion or verified viewer identity. Real nonzero audience tracking is still untested.
+
 ## Recommended next steps
 1. Validate a real viewer joining/leaving a stream in alpha.2, with demo disabled.
 2. Request or develop upstream native decoration support for voice channel participants and call tiles. Proposed independent optional APIs: addVoiceUserDecoration and addCallTileDecoration, keyed by userId; these names are design proposals, not existing APIs.
